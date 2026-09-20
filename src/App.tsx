@@ -1,7 +1,8 @@
-import { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, useEffect, ErrorInfo, ReactNode } from 'react';
 import { ConfigProvider, App as AntApp, Result, Button } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { AppLayout } from './components/Layout';
+import { bindNotifier } from './services/notifier';
 import 'highlight.js/styles/github-dark.css';
 
 // 错误边界组件
@@ -88,11 +89,23 @@ function App() {
     <ErrorBoundary>
       <ConfigProvider locale={zhCN} theme={theme}>
         <AntApp>
+          <NotifierBinder />
           <AppLayout />
         </AntApp>
       </ConfigProvider>
     </ErrorBoundary>
   );
+}
+
+/**
+ * 将 antd 的 message 实例注入到 store/service 层使用的全局通知器
+ */
+function NotifierBinder() {
+  const { message } = AntApp.useApp();
+  useEffect(() => {
+    bindNotifier(message);
+  }, [message]);
+  return null;
 }
 
 export default App;

@@ -1,6 +1,6 @@
 import { memo } from 'react';
-import { Avatar } from 'antd';
-import { UserOutlined, RobotOutlined } from '@ant-design/icons';
+import { Avatar, Button, Tooltip } from 'antd';
+import { UserOutlined, RobotOutlined, RedoOutlined } from '@ant-design/icons';
 import type { Message } from '../../types';
 import { MarkdownRenderer } from '../Common/MarkdownRenderer';
 import { CopyButton } from '../Common/CopyButton';
@@ -11,6 +11,10 @@ import './MessageItem.css';
 interface MessageItemProps {
   message: Message;
   isStreaming?: boolean;
+  /** 该条是否因存储空间不足而未保存成功 */
+  unsaved?: boolean;
+  /** 重新提交（仅未保存成功的消息展示） */
+  onRetry?: () => void;
 }
 
 /**
@@ -19,6 +23,8 @@ interface MessageItemProps {
 export const MessageItem = memo(function MessageItem({
   message,
   isStreaming = false,
+  unsaved = false,
+  onRetry,
 }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isAssistant = message.role === 'assistant';
@@ -38,7 +44,7 @@ export const MessageItem = memo(function MessageItem({
       </div>
 
       <div className="message-content-wrapper">
-        <div className={`message-bubble ${message.status}`}>
+        <div className={`message-bubble ${message.status}${unsaved ? ' unsaved' : ''}`}>
           {isStreaming && message.status === 'streaming' && !message.content ? (
             <TypingIndicator />
           ) : (
@@ -51,7 +57,28 @@ export const MessageItem = memo(function MessageItem({
             </div>
           )}
 
-          {message.status === 'error' && (
+          {unsaved && (
+            <div className="message-unsaved">
+              <span className="message-unsaved-text">
+                存储空间不足，这一条没有保存成功
+              </span>
+              {onRetry && (
+                <Tooltip title="重新提交">
+                  <Button
+                    size="small"
+                    danger
+                    type="primary"
+                    icon={<RedoOutlined />}
+                    onClick={onRetry}
+                  >
+                    重新提交
+                  </Button>
+                </Tooltip>
+              )}
+            </div>
+          )}
+
+          {message.status === 'error' && !unsaved && (
             <div className="message-error">
               <span>消息发送失败</span>
             </div>

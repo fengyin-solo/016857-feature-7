@@ -84,6 +84,28 @@
   color: var(--color-error);
 }
 
+.message-bubble.unsaved {
+  outline: 1px dashed var(--color-error);
+  outline-offset: 2px;
+}
+
+.message-unsaved {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+}
+
+.message-unsaved-text {
+  flex: 1 1 auto;
+}
+
 .message-footer {
   display: flex;
   align-items: center;

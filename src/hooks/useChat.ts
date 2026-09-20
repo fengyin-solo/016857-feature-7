@@ -53,12 +53,15 @@ export function useChat() {
         return;
       }
 
-      // 添加用户消息
-      addMessage(activeConversationId, {
+      // 添加用户消息（本地保存失败时不发起 API 请求，等用户重新提交）
+      const { saved } = addMessage(activeConversationId, {
         role: 'user',
         content,
         status: 'complete',
       });
+      if (!saved) {
+        return;
+      }
 
       // 准备 API 消息
       const apiMessages: APIMessage[] = [

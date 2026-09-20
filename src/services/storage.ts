@@ -1,12 +1,49 @@
-import type { AppConfig, Conversation, PromptTemplate } from '../types';
+import type { AppConfig, Conversation, ConversationStoreData, ConversationTombstone, PromptTemplate } from '../types';
 import { DEFAULT_CONFIG, DEFAULT_TEMPLATES } from '../types';
+import {
+  createEmptyStoreData,
+  isValidConversation,
+  pruneTombstones,
+} from './conversationSync';
+
+/** 对话存储使用的 localStorage key（跨标签页 storage 事件据此过滤） */
+export const CONVERSATIONS_STORAGE_KEY = 'react-chat-conversations';
 
 // Storage keys
 const STORAGE_KEYS = {
   CONFIG: 'react-chat-config',
-  CONVERSATIONS: 'react-chat-conversations',
+  CONVERSATIONS: CONVERSATIONS_STORAGE_KEY,
   PROMPT_TEMPLATES: 'react-chat-prompt-templates',
 } as const;
+
+/** 本地存储结构版本 */
+const CONVERSATION_STORE_VERSION = 2 as const;
+
+/**
+ * 存储空间不足错误。
+ * 调用方据此明确告知用户"这一条没有保存成功"，并允许重新提交。
+ */
+export class StorageQuotaError extends Error {
+  constructor(message: string = '本地存储空间不足') {
+    super(message);
+    this.name = 'StorageQuotaError';
+  }
+}
+
+/** 判断一个异常是否为浏览器存储配额耗尽 */
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof DOMException) {
+    // QuotaExceededError 的 name 在各浏览器中基本稳定
+    return (
+      error.name === 'QuotaExceededError' ||
+      error.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      error.code === 22 ||
+      error.code === 1014
+    );
+  }
+  return error instanceof StorageQuotaError;
+}
 
 /**
  * 简单的加密函数（Base64 + 字符偏移）
@@ -102,55 +139,80 @@ export function clearConfig(): void {
 }
 
 /**
- * 保存对话列表到 localStorage
- * @param conversations 对话列表
+ * 保存对话存储（v2 信封：对话 + 删除墓碑 + 清空标记）到 localStorage。
+ * 不再静默丢弃数据；空间不足时抛出 StorageQuotaError，由上层提示并允许重试。
+ * @param data 对话存储数据
  */
-export function saveConversations(conversations: Conversation[]): void {
+export function saveConversations(data: ConversationStoreData): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
+    const payload: ConversationStoreData = {
+      version: CONVERSATION_STORE_VERSION,
+      conversations: data.conversations,
+      tombstones: pruneTombstones(data.tombstones),
+      clearedAt: data.clearedAt,
+    };
+    localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(payload));
   } catch (error) {
     console.error('Failed to save conversations:', error);
-    
-    // 如果存储失败（可能是超出配额），尝试只保存最近的对话
-    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-      const recentConversations = conversations.slice(0, 10);
-      try {
-        localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(recentConversations));
-      } catch {
-        throw new Error('存储空间不足，无法保存对话');
-      }
-    } else {
-      throw new Error('保存对话失败');
+    if (isQuotaExceededError(error)) {
+      throw new StorageQuotaError('存储空间不足，这一条没有保存成功，请删除部分旧对话后重新提交');
     }
+    throw new Error('保存对话失败');
   }
 }
 
 /**
- * 从 localStorage 加载对话列表
- * @returns 对话列表
+ * 从 localStorage 加载对话存储。
+ * 兼容旧版（v1：裸数组）结构；保留存储时的原始排列顺序，不做重排。
+ * @returns 对话存储数据
  */
-export function loadConversations(): Conversation[] {
+export function loadConversations(): ConversationStoreData {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS);
-    
+
     if (!stored) {
-      return [];
+      return createEmptyStoreData();
     }
-    
-    const parsed = JSON.parse(stored) as Conversation[];
-    
-    // 验证数据结构
-    if (!Array.isArray(parsed)) {
-      return [];
+
+    const parsed: unknown = JSON.parse(stored);
+
+    // 旧版数据迁移：裸数组 → v2 信封
+    if (Array.isArray(parsed)) {
+      const conversations = (parsed as unknown[]).filter(isValidConversation);
+      return {
+        version: CONVERSATION_STORE_VERSION,
+        conversations,
+        tombstones: [],
+        clearedAt: null,
+      };
     }
-    
-    // 过滤无效数据并按更新时间排序
-    return parsed
-      .filter(conv => conv && conv.id && Array.isArray(conv.messages))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    // v2 信封
+    if (parsed && typeof parsed === 'object') {
+      const envelope = parsed as Partial<ConversationStoreData>;
+      const conversations = Array.isArray(envelope.conversations)
+        ? envelope.conversations.filter(isValidConversation)
+        : [];
+      const tombstones = Array.isArray(envelope.tombstones)
+        ? envelope.tombstones.filter(
+            (t): t is ConversationTombstone =>
+              !!t &&
+              typeof (t as { id?: unknown }).id === 'string' &&
+              typeof (t as { deletedAt?: unknown }).deletedAt === 'number',
+          )
+        : [];
+      return {
+        version: CONVERSATION_STORE_VERSION,
+        conversations,
+        tombstones: pruneTombstones(tombstones),
+        clearedAt: typeof envelope.clearedAt === 'number' ? envelope.clearedAt : null,
+      };
+    }
+
+    return createEmptyStoreData();
   } catch (error) {
     console.error('Failed to load conversations:', error);
-    return [];
+    return createEmptyStoreData();
   }
 }
 
@@ -201,7 +263,7 @@ export function getStorageUsage(): { used: number; available: number } {
  * 导出所有数据
  * @returns 导出的数据对象
  */
-export function exportData(): { config: AppConfig; conversations: Conversation[] } {
+export function exportData(): { config: AppConfig; conversations: ConversationStoreData } {
   return {
     config: loadConfig(),
     conversations: loadConversations(),
@@ -212,13 +274,26 @@ export function exportData(): { config: AppConfig; conversations: Conversation[]
  * 导入数据
  * @param data 要导入的数据
  */
-export function importData(data: { config?: AppConfig; conversations?: Conversation[] }): void {
+export function importData(data: {
+  config?: AppConfig;
+  conversations?: ConversationStoreData | Conversation[];
+}): void {
   if (data.config) {
     saveConfig(data.config);
   }
-  
+
   if (data.conversations) {
-    saveConversations(data.conversations);
+    if (Array.isArray(data.conversations)) {
+      // 兼容旧版裸数组
+      saveConversations({
+        version: 2,
+        conversations: data.conversations.filter(isValidConversation),
+        tombstones: [],
+        clearedAt: null,
+      });
+    } else {
+      saveConversations(data.conversations);
+    }
   }
 }
 

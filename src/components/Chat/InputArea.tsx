@@ -8,7 +8,8 @@ import './InputArea.css';
 const { TextArea } = Input;
 
 interface InputAreaProps {
-  onSend: (content: string) => void;
+  /** 返回 false（或 resolve false）表示本条未被接受/保存，输入内容保留以便重新提交 */
+  onSend: (content: string) => void | boolean | Promise<boolean>;
   onStop?: () => void;
   isLoading: boolean;
   isStreaming: boolean;
@@ -28,6 +29,7 @@ export function InputArea({
   placeholder = '输入消息，按 Enter 发送，Shift + Enter 换行',
 }: InputAreaProps) {
   const [content, setContent] = useState('');
+  const [sending, setSending] = useState(false);
   const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -45,24 +47,31 @@ export function InputArea({
     }, 50);
   }, []);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     if (!validateMessageContent(content)) {
       message.warning('请输入消息内容');
       return;
     }
 
-    if (isLoading || isStreaming) {
+    if (isLoading || isStreaming || sending) {
       return;
     }
 
-    onSend(content.trim());
-    setContent('');
-
-    // 重新聚焦输入框
-    setTimeout(() => {
-      textAreaRef.current?.focus();
-    }, 0);
-  }, [content, isLoading, isStreaming, onSend]);
+    const trimmed = content.trim();
+    setSending(true);
+    try {
+      // 只有本条被成功接受并保存后才清空；保存失败时保留内容供重新提交
+      const accepted = await onSend(trimmed);
+      if (accepted !== false) {
+        setContent('');
+      }
+    } finally {
+      setSending(false);
+      setTimeout(() => {
+        textAreaRef.current?.focus();
+      }, 0);
+    }
+  }, [content, isLoading, isStreaming, sending, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -81,7 +90,7 @@ export function InputArea({
     }
   }, [onStop]);
 
-  const isDisabled = disabled || (!isStreaming && isLoading);
+  const isDisabled = disabled || (!isStreaming && isLoading) || sending;
   const showStopButton = isStreaming;
 
   return (

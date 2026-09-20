@@ -9,6 +9,10 @@ interface MessageListProps {
   messages: Message[];
   isStreaming: boolean;
   streamingMessageId: string | null;
+  /** 本地未保存成功的消息 ID */
+  unsavedMessageIds?: string[];
+  /** 重新提交未保存成功的消息 */
+  onRetryMessage?: (messageId: string) => void;
 }
 
 /**
@@ -18,6 +22,8 @@ export function MessageList({
   messages,
   isStreaming,
   streamingMessageId,
+  unsavedMessageIds = [],
+  onRetryMessage,
 }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -53,6 +59,12 @@ export function MessageList({
             key={message.id}
             message={message}
             isStreaming={isStreaming && message.id === streamingMessageId}
+            unsaved={unsavedMessageIds.includes(message.id)}
+            onRetry={
+              unsavedMessageIds.includes(message.id) && onRetryMessage
+                ? () => onRetryMessage(message.id)
+                : undefined
+            }
           />
         ))}
       </div>

@@ -19,6 +19,8 @@ export type {
   CreateConversationParams,
   ConversationSortBy,
   SortOrder,
+  ConversationTombstone,
+  ConversationStoreData,
 } from './conversation'
 
 export type {
