@@ -1,5 +1,10 @@
 import type { AppConfig, Conversation, PromptTemplate } from '../types';
 import { DEFAULT_CONFIG, DEFAULT_TEMPLATES } from '../types';
+import {
+  commitConversations,
+  readEnvelope,
+  writeEnvelope,
+} from './conversationRepository';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -103,55 +108,35 @@ export function clearConfig(): void {
 
 /**
  * 保存对话列表到 localStorage
+ *
+ * 通过 conversationRepository 与磁盘最新内容合并后写入：多标签页场景下
+ * 不会整体覆盖其他标签页的改动，已有记录的标题与时间也不会被改写。
+ * 条数超限时由仓库层淘汰最旧记录；容量不足时抛出错误，由调用方提示。
  * @param conversations 对话列表
  */
 export function saveConversations(conversations: Conversation[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
+    // 保留既有墓碑/清空标记，只替换对话列表
+    const current = readEnvelope();
+    commitConversations({ ...current, conversations });
   } catch (error) {
     console.error('Failed to save conversations:', error);
-    
-    // 如果存储失败（可能是超出配额），尝试只保存最近的对话
     if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-      const recentConversations = conversations.slice(0, 10);
-      try {
-        localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(recentConversations));
-      } catch {
-        throw new Error('存储空间不足，无法保存对话');
-      }
-    } else {
-      throw new Error('保存对话失败');
+      throw new Error('存储空间不足，无法保存对话');
     }
+    throw new Error('保存对话失败');
   }
 }
 
 /**
  * 从 localStorage 加载对话列表
+ *
+ * 不做任何重排：列表顺序与上次持久化时完全一致，
+ * 刷新页面或返回后排列保持原样。
  * @returns 对话列表
  */
 export function loadConversations(): Conversation[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS);
-    
-    if (!stored) {
-      return [];
-    }
-    
-    const parsed = JSON.parse(stored) as Conversation[];
-    
-    // 验证数据结构
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    
-    // 过滤无效数据并按更新时间排序
-    return parsed
-      .filter(conv => conv && conv.id && Array.isArray(conv.messages))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch (error) {
-    console.error('Failed to load conversations:', error);
-    return [];
-  }
+  return readEnvelope().conversations;
 }
 
 /**
@@ -159,7 +144,7 @@ export function loadConversations(): Conversation[] {
  */
 export function clearConversations(): void {
   try {
-    localStorage.removeItem(STORAGE_KEYS.CONVERSATIONS);
+    writeEnvelope({ version: 1, conversations: [], tombstones: {}, clearedAt: Date.now() });
   } catch (error) {
     console.error('Failed to clear conversations:', error);
   }
